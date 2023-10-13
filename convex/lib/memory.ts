@@ -11,7 +11,9 @@ import { asyncMap } from './utils.js';
 import { EntryOfType, Memories, Memory, MemoryOfType, MemoryType } from '../schema.js';
 import { chatCompletion } from './openai.js';
 import { clientMessageMapper } from '../chat.js';
-import { pineconeAvailable, queryVectors, upsertVectors } from './pinecone.js';
+// import { pineconeAvailable, queryVectors, upsertVectors } from './pinecone.js';
+import { queryVectors, upsertVectors } from './milvus.js';
+import { isMilvusServiceRunning } from './milvus.js';
 import { chatHistoryFromMessages } from '../conversation.js';
 import { MEMORY_ACCESS_THROTTLE } from '../config.js';
 import { fetchEmbeddingBatchWithCache } from './cached_llm.js';
@@ -39,13 +41,13 @@ export interface MemoryDB {
     playerId: Id<'players'>,
     playerIdentity: string,
     conversationId: Id<'conversations'>,
-  // ): Promise<boolean>;
+    // ): Promise<boolean>;
   ): Promise<string>;
   reflectOnMemories(playerId: Id<'players'>, name: string): Promise<void>;
 }
 
 export function MemoryDB(ctx: ActionCtx): MemoryDB {
-  if (!pineconeAvailable()) {
+  if (!isMilvusServiceRunning()) {
     throw new Error('Pinecone environment variables not set. See the README.');
   }
   // If Pinecone env variables are defined, use that.
@@ -59,19 +61,19 @@ export function MemoryDB(ctx: ActionCtx): MemoryDB {
     // Finds memories but doesn't mark them as accessed.
     async search(playerId, queryEmbedding, limit = 100) {
       const results = await vectorSearch(queryEmbedding, playerId, limit);
-      const embeddingIds = results.map((r) => r._id);
+      const embeddingIds = results!.map((r) => r._id);
       const memories = await ctx.runQuery(internal.lib.memory.getMemories, {
         playerId,
         embeddingIds,
       });
-      return results.map(({ score }, idx) => ({ memory: memories[idx], score }));
+      return results!.map(({ score }, idx) => ({ memory: memories[idx], score }));
     },
 
     async accessMemories(playerId, queryEmbedding, count = 10) {
       const results = await vectorSearch(queryEmbedding, playerId, 10 * count);
       return await ctx.runMutation(internal.lib.memory.accessMemories, {
         playerId,
-        candidates: results,
+        candidates: results!,
         count,
       });
     },
@@ -80,7 +82,7 @@ export function MemoryDB(ctx: ActionCtx): MemoryDB {
       const texts = memoriesWithoutEmbedding.map((memory) => memory.description);
       const { embeddings } = await fetchEmbeddingBatchWithCache(ctx, texts);
       // NB: The cache gets populated by addMemories, so no need to do it here.
-      
+
       console.debug("now: asyncMap");
 
       const memories = await asyncMap(memoriesWithoutEmbedding, async (memory, idx) => {
@@ -100,7 +102,7 @@ export function MemoryDB(ctx: ActionCtx): MemoryDB {
             ],
             max_tokens: 1,
           });
-          
+
           console.debug("now finish: chatCompletion");
           let importance = NaN;
           for (let i = 0; i < importanceRaw.length; i++) {
@@ -120,7 +122,7 @@ export function MemoryDB(ctx: ActionCtx): MemoryDB {
           return { ...memory, embedding, importance: memory.importance };
         }
       });
-      
+
       const embeddingIds = await ctx.runMutation(internal.lib.memory.addMemories, { memories });
       if (externalEmbeddingStore) {
         await externalEmbeddingStore(
