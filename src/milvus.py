@@ -15,6 +15,7 @@ class VDBHandeler:
         self.init_milvus(args.reset)
         self.bp = Blueprint("VectorDB", __name__)
         self.register_routes()
+        self.args = args
 
     def register_routes(self):
         self.bp.add_url_rule("/upsert", "upsert",
@@ -25,8 +26,14 @@ class VDBHandeler:
             "/query", "query", self.query_Data, methods=["POST"])
         self.bp.add_url_rule("/", "alive", self.alive, methods=["GET"])
 
+    def add_noise(score: list, eps=1):
+        ret = []
+        for i in len(score):
+            ret.append(np.random.laplace(0, 1/eps))
+        return ret
+
     def alive(self):
-        return "GOOD"
+        return "Ok"
 
     def upsert_Data(self):
         data = request.get_json()
@@ -71,6 +78,8 @@ class VDBHandeler:
                            param=search_params, anns_field="values", consistency_level="Strong", expr="playerId == '"+str(data["filter"]["playerId"])+"'")
         ret = []
         print(res[0].ids, res[0].distances)
+        if args["eps"] != -1:
+            res[0].distances = self.add_noise(res[0].distances)
         for i, s in zip(res[0].ids, res[0].distances):
             ret.append({"id": i, "score": s})
         response = str(ret).replace("'", '"')
@@ -131,7 +140,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Start milvus service.')
     parser.add_argument('--reset', action="store_true",
                         help="reset vector database.")
-
+    parser.add_argument('--eps', type=float, default=-1,
+                        help='Specify the value of epsilon')
     args = parser.parse_args()
     print(args)
     vdb = VDBHandeler(args)
